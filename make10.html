@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MAKE 10 — 数字パズル</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+JP:wght@300;400;700&display=swap');
+
+  :root {
+    --bg:       #080c14;
+    --panel:    #0d1520;
+    --border:   #1a2a3a;
+    --accent:   #00e5ff;
+    --accent2:  #ff3366;
+    --gold:     #ffd700;
+    --text:     #c8dce8;
+    --dim:      #4a6070;
+    --cell-bg:  #111d2a;
+    --cell-sel: #002233;
+    --cell-ok:  #003322;
+    --glow:     0 0 12px #00e5ff88;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans JP', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    overflow-x: hidden;
+  }
+
+  /* scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,229,255,0.015) 2px,
+      rgba(0,229,255,0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  h1 {
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(1.4rem, 5vw, 2.2rem);
+    font-weight: 900;
+    letter-spacing: 0.15em;
+    color: var(--accent);
+    text-shadow: 0 0 20px #00e5ff99, 0 0 40px #00e5ff44;
+    margin-bottom: 4px;
+  }
+
+  .subtitle {
+    font-size: 0.78rem;
+    color: var(--dim);
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  /* HUD bar */
+  .hud {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    width: 100%;
+    max-width: 500px;
+  }
+
+  .hud-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .hud-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+
+  .hud-value {
+    font-family: 'Orbitron', monospace;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+    text-shadow: var(--glow);
+    min-width: 3ch;
+    text-align: center;
+  }
+
+  .hud-value.danger { color: var(--accent2); text-shadow: 0 0 12px #ff336688; }
+  .hud-value.gold   { color: var(--gold);   text-shadow: 0 0 12px #ffd70088; }
+
+  /* Timer bar */
+  .timer-wrap {
+    width: 100%;
+    max-width: 500px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+
+  .timer-bar {
+    height: 100%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    transition: width 0.2s linear, background 0.3s;
+    border-radius: 2px;
+  }
+
+  .timer-bar.low {
+    background: var(--accent2);
+    box-shadow: 0 0 8px var(--accent2);
+  }
+
+  /* Grid */
+  .grid-wrap {
+    position: relative;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    width: min(calc(100vw - 32px), 480px);
+    aspect-ratio: 1;
+  }
+
+  .cell {
+    background: var(--cell-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(0.85rem, 2.5vw, 1.15rem);
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.12s;
+    color: var(--text);
+    position: relative;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .cell:hover:not(.cleared) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .cell.selected {
+    background: var(--cell-sel);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 10px #00e5ff55, inset 0 0 6px #00e5ff22;
+    transform: scale(1.08);
+    z-index: 2;
+  }
+
+  .cell.flash-ok {
+    animation: flash-ok 0.4s ease forwards;
+  }
+
+  .cell.flash-ng {
+    animation: flash-ng 0.3s ease forwards;
+  }
+
+  .cell.cleared {
+    background: var(--cell-ok);
+    border-color: #00ff8844;
+    color: #00ff88;
+    pointer-events: none;
+    animation: pop-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .cell.shuffle-anim {
+    animation: shuffle 0.4s ease;
+  }
+
+  @keyframes flash-ok {
+    0%   { background: #00e5ff33; border-color: var(--accent); box-shadow: 0 0 20px #00e5ffaa; }
+    100% { background: var(--cell-ok); border-color: #00ff8844; }
+  }
+
+  @keyframes flash-ng {
+    0%, 100% { transform: translateX(0); }
+    25%  { transform: translateX(-4px); background: #ff336622; border-color: var(--accent2); }
+    75%  { transform: translateX(4px);  background: #ff336622; border-color: var(--accent2); }
+  }
+
+  @keyframes pop-in {
+    0%   { transform: scale(0.7); opacity: 0.3; }
+    100% { transform: scale(1);   opacity: 1; }
+  }
+
+  @keyframes shuffle {
+    0%   { transform: scale(1) rotate(0deg);   opacity: 1; }
+    40%  { transform: scale(0.5) rotate(10deg); opacity: 0.2; }
+    100% { transform: scale(1) rotate(0deg);   opacity: 1; }
+  }
+
+  /* Sum preview */
+  .sum-preview {
+    text-align: center;
+    font-family: 'Orbitron', monospace;
+    font-size: 1rem;
+    color: var(--dim);
+    margin-bottom: 14px;
+    height: 1.4em;
+    transition: color 0.2s;
+  }
+
+  .sum-preview.near { color: var(--gold); }
+  .sum-preview.over { color: var(--accent2); }
+  .sum-preview.hit  { color: var(--accent); text-shadow: var(--glow); }
+
+  /* Buttons */
+  .btn-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  button {
+    font-family: 'Orbitron', monospace;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    padding: 10px 22px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+
+  button:hover {
+    background: var(--accent);
+    color: var(--bg);
+    box-shadow: var(--glow);
+  }
+
+  button.secondary {
+    border-color: var(--dim);
+    color: var(--dim);
+  }
+
+  button.secondary:hover {
+    border-color: var(--text);
+    color: var(--text);
+    background: transparent;
+    box-shadow: none;
+  }
+
+  /* Overlay */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8,12,20,0.92);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    gap: 18px;
+    padding: 24px;
+    backdrop-filter: blur(4px);
+  }
+
+  .overlay.hidden { display: none; }
+
+  .overlay-title {
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(1.6rem, 6vw, 2.8rem);
+    font-weight: 900;
+    text-align: center;
+  }
+
+  .overlay-title.win   { color: var(--accent); text-shadow: 0 0 30px #00e5ffcc; }
+  .overlay-title.lose  { color: var(--accent2); text-shadow: 0 0 30px #ff3366cc; }
+
+  .overlay-stat {
+    font-size: 0.9rem;
+    color: var(--text);
+    text-align: center;
+    letter-spacing: 0.05em;
+  }
+
+  .overlay-score {
+    font-family: 'Orbitron', monospace;
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: var(--gold);
+    text-shadow: 0 0 20px #ffd70099;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-80px);
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: 'Orbitron', monospace;
+    font-size: 0.85rem;
+    padding: 10px 24px;
+    border-radius: 30px;
+    box-shadow: var(--glow);
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    z-index: 200;
+    white-space: nowrap;
+  }
+
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.shuffle-toast { border-color: var(--gold); color: var(--gold); box-shadow: 0 0 12px #ffd70088; }
+
+  /* Combo display */
+  .combo-display {
+    position: fixed;
+    pointer-events: none;
+    font-family: 'Orbitron', monospace;
+    font-weight: 900;
+    color: var(--accent);
+    text-shadow: var(--glow);
+    font-size: 1.4rem;
+    opacity: 0;
+    z-index: 150;
+    transition: none;
+  }
+
+  .combo-display.animate {
+    animation: combo-fly 0.8s ease forwards;
+  }
+
+  @keyframes combo-fly {
+    0%   { opacity: 1; transform: translateY(0) scale(1); }
+    80%  { opacity: 1; transform: translateY(-50px) scale(1.3); }
+    100% { opacity: 0; transform: translateY(-70px) scale(1.4); }
+  }
+</style>
+</head>
+<body>
+
+<h1>MAKE 10</h1>
+<p class="subtitle">数字を選んで合計10を作れ</p>
+
+<div class="hud">
+  <div class="hud-block">
+    <span class="hud-label">スコア</span>
+    <span class="hud-value gold" id="score">0</span>
+  </div>
+  <div class="hud-block">
+    <span class="hud-label">タイム</span>
+    <span class="hud-value" id="timer">30</span>
+  </div>
+  <div class="hud-block">
+    <span class="hud-label">コンボ</span>
+    <span class="hud-value" id="combo">x1</span>
+  </div>
+  <div class="hud-block">
+    <span class="hud-label">シャッフル</span>
+    <span class="hud-value" id="shuffleCount">0</span>
+  </div>
+</div>
+
+<div class="timer-wrap">
+  <div class="timer-bar" id="timerBar"></div>
+</div>
+
+<div class="sum-preview" id="sumPreview">マスを選択してください</div>
+
+<div class="grid-wrap">
+  <div class="grid" id="grid"></div>
+</div>
+
+<div class="btn-row">
+  <button id="btnClear" class="secondary">選択解除</button>
+  <button id="btnShuffle" class="secondary">シャッフル</button>
+  <button id="btnRestart" class="secondary">リスタート</button>
+</div>
+
+<!-- Overlay -->
+<div class="overlay hidden" id="overlay">
+  <div class="overlay-title" id="overlayTitle"></div>
+  <div class="overlay-stat" id="overlayStat"></div>
+  <div class="overlay-score" id="overlayScore"></div>
+  <button id="overlayBtn">もう一度プレイ</button>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Combo flying label -->
+<div class="combo-display" id="comboDisplay"></div>
+
+<script>
+const GRID_SIZE = 3;
+const TIME_LIMIT = 30;
+const TARGET = 10;
+const SHUFFLE_THRESHOLD = 10; // check for no-move after N failed attempts? use auto-check
+
+let grid = [];
+let selected = [];
+let score = 0;
+let combo = 1;
+let timeLeft = TIME_LIMIT;
+let timerInterval = null;
+let gameActive = false;
+let shuffleCount = 0;
+let shuffleCheckTimeout = null;
+
+const gridEl = document.getElementById('grid');
+const timerEl = document.getElementById('timer');
+const timerBarEl = document.getElementById('timerBar');
+const scoreEl = document.getElementById('score');
+const comboEl = document.getElementById('combo');
+const shuffleCountEl = document.getElementById('shuffleCount');
+const sumPreviewEl = document.getElementById('sumPreview');
+const overlayEl = document.getElementById('overlay');
+const overlayTitleEl = document.getElementById('overlayTitle');
+const overlayStatEl = document.getElementById('overlayStat');
+const overlayScoreEl = document.getElementById('overlayScore');
+const toastEl = document.getElementById('toast');
+const comboDisplayEl = document.getElementById('comboDisplay');
+
+// ---- Init ----
+function randDigit() { return Math.floor(Math.random() * 9) + 1; }
+
+function initGrid() {
+  grid = Array.from({ length: GRID_SIZE * GRID_SIZE }, randDigit);
+}
+
+function canMake10(values) {
+  // Check if any subset of 2+ cells sums to 10
+  const n = values.length;
+  for (let mask = 3; mask < (1 << n); mask++) {
+    if ((mask & (mask - 1)) === 0) continue; // single bit = skip
+    let s = 0;
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) s += values[i];
+    }
+    if (s === TARGET) return true;
+  }
+  return false;
+}
+
+function hasValidMove() {
+  // Sample a subset of cells to check; full brute-force for ≤81 cells but limit subsets
+  const vals = grid.filter(v => v > 0);
+  // Quick check: pairs
+  for (let i = 0; i < vals.length; i++)
+    for (let j = i+1; j < vals.length; j++)
+      if (vals[i] + vals[j] === TARGET) return true;
+  // Triples
+  for (let i = 0; i < vals.length; i++)
+    for (let j = i+1; j < vals.length; j++)
+      for (let k = j+1; k < vals.length; k++)
+        if (vals[i]+vals[j]+vals[k] === TARGET) return true;
+  return false;
+}
+
+function buildDOM() {
+  gridEl.innerHTML = '';
+  for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.dataset.idx = i;
+    cell.textContent = grid[i];
+    cell.addEventListener('click', () => onCellClick(i));
+    gridEl.appendChild(cell);
+  }
+}
+
+function refreshDOM() {
+  const cells = gridEl.querySelectorAll('.cell');
+  cells.forEach((cell, i) => {
+    const v = grid[i];
+    cell.textContent = v || '';
+    cell.className = 'cell';
+    if (selected.includes(i)) cell.classList.add('selected');
+  });
+}
+
+// ---- Game logic ----
+function startGame() {
+  score = 0;
+  combo = 1;
+  timeLeft = TIME_LIMIT;
+  selected = [];
+  shuffleCount = 0;
+  gameActive = true;
+  overlayEl.classList.add('hidden');
+
+  updateHUD();
+  initGrid();
+  buildDOM();
+  updateSumPreview();
+  startTimer();
+}
+
+function startTimer() {
+  clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    timeLeft -= 0.2;
+    if (timeLeft <= 0) {
+      timeLeft = 0;
+      endGame();
+    }
+    updateTimerDisplay();
+  }, 200);
+}
+
+function addTime(sec) {
+  timeLeft = Math.min(timeLeft + sec, TIME_LIMIT);
+}
+
+function endGame() {
+  clearInterval(timerInterval);
+  gameActive = false;
+  overlayTitleEl.textContent = 'TIME UP';
+  overlayTitleEl.className = 'overlay-title lose';
+  overlayStatEl.textContent = `シャッフル回数: ${shuffleCount}回`;
+  overlayScoreEl.textContent = score;
+  overlayEl.classList.remove('hidden');
+}
+
+function onCellClick(idx) {
+  if (!gameActive) return;
+  if (grid[idx] === 0) return;
+
+  if (selected.includes(idx)) {
+    selected = selected.filter(i => i !== idx);
+  } else {
+    selected.push(idx);
+  }
+
+  const sum = selected.reduce((a, i) => a + grid[i], 0);
+
+  if (sum === TARGET && selected.length >= 2) {
+    confirmSelection();
+    return;
+  }
+
+  if (sum > TARGET) {
+    // Shake all selected
+    flashCells(selected, 'flash-ng');
+    selected = [];
+    combo = 1;
+    updateHUD();
+  }
+
+  updateSumPreview();
+  refreshDOM();
+}
+
+function confirmSelection() {
+  const cells = gridEl.querySelectorAll('.cell');
+  
+  // Flash success
+  selected.forEach(idx => {
+    cells[idx].classList.add('flash-ok');
+  });
+
+  // Score
+  const pts = 10 * combo * selected.length;
+  score += pts;
+  showComboFly(`+${pts}`, combo > 1 ? `${combo}コンボ!` : null);
+  
+  combo++;
+  addTime(2);
+
+  // Replace cells with new numbers after brief delay
+  setTimeout(() => {
+    selected.forEach(idx => {
+      grid[idx] = randDigit();
+      const cell = cells[idx];
+      cell.textContent = grid[idx];
+      cell.className = 'cell';
+      cell.classList.add('cleared');
+      setTimeout(() => {
+        cell.classList.remove('cleared');
+      }, 400);
+    });
+    selected = [];
+    updateHUD();
+    updateSumPreview();
+
+    // Check if still possible
+    scheduleNoMoveCheck();
+  }, 350);
+}
+
+function scheduleNoMoveCheck() {
+  clearTimeout(shuffleCheckTimeout);
+  shuffleCheckTimeout = setTimeout(() => {
+    if (!hasValidMove()) {
+      autoShuffle();
+    }
+  }, 500);
+}
+
+function flashCells(idxs, cls) {
+  const cells = gridEl.querySelectorAll('.cell');
+  idxs.forEach(i => {
+    cells[i].classList.add(cls);
+    setTimeout(() => cells[i].classList.remove(cls), 350);
+  });
+}
+
+function autoShuffle() {
+  showToast('手詰まり！シャッフル', true);
+  doShuffle();
+}
+
+function doShuffle() {
+  const cells = gridEl.querySelectorAll('.cell');
+  shuffleCount++;
+  shuffleCountEl.textContent = shuffleCount;
+  combo = 1;
+  updateHUD();
+
+  // Animate
+  cells.forEach(c => c.classList.add('shuffle-anim'));
+
+  setTimeout(() => {
+    // Shuffle the grid values
+    for (let i = grid.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [grid[i], grid[j]] = [grid[j], grid[i]];
+    }
+    // Some cells also randomize
+    for (let i = 0; i < grid.length; i++) {
+      if (Math.random() < 0.3) grid[i] = randDigit();
+    }
+    selected = [];
+    refreshDOM();
+    updateSumPreview();
+    cells.forEach(c => c.classList.remove('shuffle-anim'));
+  }, 400);
+}
+
+// ---- HUD ----
+function updateHUD() {
+  scoreEl.textContent = score;
+  comboEl.textContent = `x${combo}`;
+  comboEl.className = 'hud-value' + (combo >= 3 ? ' gold' : combo >= 2 ? '' : '');
+  shuffleCountEl.textContent = shuffleCount;
+}
+
+function updateTimerDisplay() {
+  const secs = Math.ceil(timeLeft);
+  timerEl.textContent = secs;
+  timerEl.className = 'hud-value' + (timeLeft <= 8 ? ' danger' : '');
+  const pct = (timeLeft / TIME_LIMIT) * 100;
+  timerBarEl.style.width = pct + '%';
+  timerBarEl.className = 'timer-bar' + (timeLeft <= 8 ? ' low' : '');
+}
+
+function updateSumPreview() {
+  if (selected.length === 0) {
+    sumPreviewEl.textContent = 'マスを選択してください';
+    sumPreviewEl.className = 'sum-preview';
+    return;
+  }
+  const sum = selected.reduce((a, i) => a + grid[i], 0);
+  const diff = TARGET - sum;
+  if (sum === TARGET) {
+    sumPreviewEl.textContent = `合計 ${sum} ✓`;
+    sumPreviewEl.className = 'sum-preview hit';
+  } else if (sum > TARGET) {
+    sumPreviewEl.textContent = `合計 ${sum} — オーバー！`;
+    sumPreviewEl.className = 'sum-preview over';
+  } else {
+    sumPreviewEl.textContent = `合計 ${sum} — あと ${diff}`;
+    sumPreviewEl.className = 'sum-preview' + (diff <= 2 ? ' near' : '');
+  }
+}
+
+// ---- Toast ----
+let toastTimeout;
+function showToast(msg, isShuffle = false) {
+  toastEl.textContent = msg;
+  toastEl.className = 'toast show' + (isShuffle ? ' shuffle-toast' : '');
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toastEl.classList.remove('show');
+  }, 1800);
+}
+
+// ---- Combo fly ----
+function showComboFly(pts, comboMsg) {
+  const el = comboDisplayEl;
+  el.className = 'combo-display';
+  el.textContent = comboMsg ? `${comboMsg} ${pts}` : pts;
+  // Position roughly center of grid
+  const rect = gridEl.getBoundingClientRect();
+  el.style.left = (rect.left + rect.width/2 - 60) + 'px';
+  el.style.top  = (rect.top  + rect.height/2 - 20) + 'px';
+  void el.offsetWidth;
+  el.classList.add('animate');
+}
+
+// ---- Button events ----
+document.getElementById('btnClear').addEventListener('click', () => {
+  if (!gameActive) return;
+  selected = [];
+  refreshDOM();
+  updateSumPreview();
+  combo = 1;
+  updateHUD();
+});
+
+document.getElementById('btnShuffle').addEventListener('click', () => {
+  if (!gameActive) return;
+  showToast('シャッフル！');
+  doShuffle();
+});
+
+document.getElementById('btnRestart').addEventListener('click', startGame);
+document.getElementById('overlayBtn').addEventListener('click', startGame);
+
+// Keyboard shortcut: Escape = clear selection
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    selected = [];
+    refreshDOM();
+    updateSumPreview();
+  }
+});
+
+// ---- Boot ----
+startGame();
+</script>
+</body>
+</html>
